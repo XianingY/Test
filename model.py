@@ -1,3 +1,4 @@
+User
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from datetime import datetime, timedelta
@@ -18,14 +19,14 @@ for center, center_data in data.groupby('分拣中心'):
     train_size = int(len(center_data) * 0.8)
     train, test = center_data[:train_size], center_data[train_size:]
 
-    # 计算货量的5%和90%分位数
-    q5, q90 = train['货量'].quantile(0.05), train['货量'].quantile(0.90)
+    # 计算货量的5%和95%分位数
+    q5, q95 = train['货量'].quantile(0.05), train['货量'].quantile(0.90)
 
-    # 只保留位于5%到90%分位数之间的数据
-    train_filtered = train[(train['货量'] >= q5) & (train['货量'] <= q90)]
+    # 只保留位于5%到95%分位数之间的数据
+    train = train[(train['货量'] >= q5) & (train['货量'] <= q95)]
 
-    # 建立 SARIMA 模型，包括十一月的数据
-    model = SARIMAX(train_filtered['货量'], order=(5, 1, 0), seasonal_order=(1, 1, 1, 12))
+    # 建立 SARIMA 模型
+    model = SARIMAX(train['货量'], order=(5, 1, 0), seasonal_order=(1, 1, 1, 12))
     model_fit = model.fit()
 
     # 预测12月1日到12月31日每天的货量
@@ -33,15 +34,6 @@ for center, center_data in data.groupby('分拣中心'):
     end_date = datetime(2023, 12, 31)
     forecast_index = pd.date_range(start=start_date, end=end_date, freq='D')
     forecast = model_fit.forecast(steps=len(forecast_index))
-
-    # 获取十一月的数据
-    november_data = train[train['日期'].dt.month == 11]
-
-    # 计算十一月数据的影响，假设为平均值
-    november_influence = november_data['货量'].mean()
-
-    # 在十二月初添加十一月的影响
-    forecast[:10] += november_influence
 
     # 创建包含预测结果的 DataFrame
     forecast_df = pd.DataFrame({'分拣中心': center,
