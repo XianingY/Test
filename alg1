@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
+
 # 读取数据文件
 edges_df = pd.read_csv('3.csv', encoding='gbk')
 future_edges_df = pd.read_csv('4.csv', encoding='gbk')
@@ -14,12 +15,13 @@ G = nx.from_pandas_edgelist(
     source='始发分拣中心',
     target='到达分拣中心',
     edge_attr='货量',
-    create_using=nx.Graph()  # 无向图
+    create_using=nx.DiGraph()  # 无向图
 )
 
 # 初始化一个长度为57的数组，用于保存货量流入与流出的和
 num_centers = 57
 array1 = np.zeros(num_centers)
+
 
 # 遍历每个分拣中心
 for center_idx, center in enumerate(range(1, num_centers + 1)):
@@ -30,5 +32,76 @@ for center_idx, center in enumerate(range(1, num_centers + 1)):
     # 将流入与流出的和存储到数组中
     array1[center_idx] = in_sum + out_sum
 
-# 打印数组
-print(array1)
+# print(array1)
+
+# 更新网络图
+for _, row in future_edges_df.iterrows():
+    src, dst = row['始发分拣中心'], row['到达分拣中心']
+    if G.has_edge(src, dst):
+        specific_avg = edges_df[
+            (edges_df['始发分拣中心'] == src) | (edges_df['到达分拣中心'] == dst)
+        ]['货量'].mean()
+        G[src][dst]['货量'] = specific_avg
+    else:
+        specific_avg = edges_df[
+            (edges_df['始发分拣中心'] == src) | (edges_df['到达分拣中心'] == dst)
+        ]['货量'].mean()
+        G.add_edge(src, dst, 货量=specific_avg if not pd.isna(specific_avg) else 0)
+
+
+array2 = np.zeros(num_centers)
+
+for center_idx, center in enumerate(range(1, num_centers + 1)):
+    # 计算流入的货量总和
+    in_sum = sum(data['货量'] for source, target, data in G.edges(data=True) if target == f'SC{center}')
+    # 计算流出的货量总和
+    out_sum = sum(data['货量'] for source, target, data in G.edges(data=True) if source == f'SC{center}')
+    # 将流入与流出的和存储到数组中
+    array2[center_idx] = in_sum + out_sum
+    #四舍五入
+    # array2[center_idx] = np.round(array2[center_idx])
+
+# print(array2)
+
+
+rate = np.zeros(num_centers)
+for center_idx, center in enumerate(range(1, num_centers + 1)):
+
+    # 检查分拣中心的货量总和是否为零，如果为零则将比率设为 NaN
+    if in_sum + out_sum == 0:
+        rate[center_idx] = np.nan
+    else:
+        rate[center_idx] = array2[center_idx] / array1[center_idx]
+# 转换日期格式，确保一致性
+daily_prediction['日期'] = pd.to_datetime(daily_prediction['日期'])
+
+# 创建空DataFrame用于存储更新后的货量
+updated_loads = daily_prediction.copy()
+
+# 将DataFrame转换为每天一个字典，便于操作
+daily_load_dict = daily_prediction.groupby('日期')[['分拣中心', '货量']].apply(lambda x: dict(zip(x['分拣中心'], x['货量']))).to_dict()
+
+# 遍历每天，调整货量
+for date, loads in daily_load_dict.items():
+    # 更新DataFrame
+    for center, new_load in loads.items():
+        # 根据分拣中心的比率调整货量
+        rate_adjusted_load = new_load * rate[int(center[2:]) - 1]  # 使用分拣中心的比率来调整货量
+        updated_loads.loc[(updated_loads['日期'] == date) & (updated_loads['分拣中心'] == center), '货量'] = rate_adjusted_load
+
+
+updated_loads = np.round(updated_loads)
+updated_loads.to_csv('r3.csv', index=False)
+
+
+print(updated_loads)
+# 分发每日货量到每小时货量
+def distribute_daily_to_hourly(daily_forecast, hourly_distribution):
+    forecast_detailed = daily_forecast.merge(hourly_distribution, on=['分拣中心'], how='inner')
+    forecast_detailed['预测货量'] = forecast_detailed['货量'] * forecast_detailed['小时比例']
+    return forecast_detailed[['分拣中心', '日期', '小时', '预测货量']]
+
+result_hourly = distribute_daily_to_hourly(updated_loads, avg_distribution)
+
+result_hourly = np.round(result_hourly)
+result_hourly.to_csv('r4.csv', index=False)
