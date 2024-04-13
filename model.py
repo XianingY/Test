@@ -62,6 +62,9 @@ for center, center_data in data.groupby('分拣中心'):
     # 预测时间范围
     forecast_index = pd.date_range(start=center_data['日期'].iloc[-1] + timedelta(days=1), periods=len(forecast),
                                    freq='D')
+        print(
+        f"Center: {center}, Forecast shape: {forecast.shape}, Forecast start date: {forecast_index[0]}, Forecast end date: {forecast_index[-1]}")
+
 
     forecast_df = pd.DataFrame({'分拣中心': np.full(len(forecast_index), center),
                                 '日期': forecast_index,
