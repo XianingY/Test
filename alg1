@@ -1,0 +1,34 @@
+import numpy as np
+import pandas as pd
+import networkx as nx
+
+# 读取数据文件
+edges_df = pd.read_csv('3.csv', encoding='gbk')
+future_edges_df = pd.read_csv('4.csv', encoding='gbk')
+daily_prediction = pd.read_csv('r1.csv', encoding='utf-8')
+avg_distribution = pd.read_csv('avg_distribution.csv', encoding='utf-8')
+
+# 构建网络图
+G = nx.from_pandas_edgelist(
+    edges_df,
+    source='始发分拣中心',
+    target='到达分拣中心',
+    edge_attr='货量',
+    create_using=nx.Graph()  # 无向图
+)
+
+# 初始化一个长度为57的数组，用于保存货量流入与流出的和
+num_centers = 57
+array1 = np.zeros(num_centers)
+
+# 遍历每个分拣中心
+for center_idx, center in enumerate(range(1, num_centers + 1)):
+    # 计算流入的货量总和
+    in_sum = sum(data['货量'] for source, target, data in G.edges(data=True) if target == f'SC{center}')
+    # 计算流出的货量总和
+    out_sum = sum(data['货量'] for source, target, data in G.edges(data=True) if source == f'SC{center}')
+    # 将流入与流出的和存储到数组中
+    array1[center_idx] = in_sum + out_sum
+
+# 打印数组
+print(array1)
