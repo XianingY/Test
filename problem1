@@ -1,0 +1,155 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from keras.models import Sequential
+from keras.layers import LSTM, Dense
+from datetime import datetime, timedelta
+
+# 读取数据
+data = pd.read_csv('1.csv', encoding='gbk')
+
+# 数据预处理
+data['日期'] = pd.to_datetime(data['日期'])
+data = data.sort_values(['分拣中心', '日期'])
+
+# 建立空的 DataFrame 存储所有分拣中心的预测结果
+all_forecast_results = pd.DataFrame(columns=['分拣中心', '日期', '货量'])
+
+# 遍历不同的分拣中心
+for center, center_data in data.groupby('分拣中心'):
+    # 归一化数据
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(center_data['货量'].values.reshape(-1, 1))
+
+    # 准备训练数据
+    def create_dataset(data, time_steps=1):
+        X, y = [], []
+        for i in range(len(data) - time_steps):
+            X.append(data[i:(i + time_steps), 0])
+            y.append(data[i + time_steps, 0])
+        return np.array(X), np.array(y)
+
+    time_steps = 30  # 时间步长
+    X, y = create_dataset(scaled_data, time_steps)
+
+    # 将数据重塑为LSTM的输入格式 [samples, time steps, features]
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+
+    # 建立LSTM模型
+    model = Sequential()
+    model.add(LSTM(units=50, return_sequences=True, input_shape=(X.shape[1], 1)))
+    model.add(LSTM(units=50))
+    model.add(Dense(units=1))
+
+    # 编译模型
+    model.compile(optimizer='adam', loss='mean_squared_error')
+
+    # 拟合模型
+    model.fit(X, y, epochs=100, batch_size=32)
+
+    # 预测未来30天每天的货量
+    forecast = []
+    last_sequence = scaled_data[-time_steps:]
+    for i in range(30):
+        X_forecast = np.array(last_sequence[-time_steps:]).reshape(1, time_steps, 1)
+        predicted_value = model.predict(X_forecast)
+        forecast.append(predicted_value[0, 0])
+        last_sequence = np.append(last_sequence, predicted_value)[1:]
+
+    # 反归一化预测结果
+    forecast = scaler.inverse_transform(np.array(forecast).reshape(-1, 1))
+
+    # 创建包含预测结果的 DataFrame
+    start_date = center_data['日期'].max() + timedelta(days=1)
+    forecast_index = pd.date_range(start=start_date, periods=30)
+
+    #输出获取天数的范围
+    print(
+        f"Center: {center}, Forecast shape: {forecast.shape}, Forecast start date: {forecast_index[0]}, Forecast end date: {forecast_index[-1]}")
+
+    forecast_df = pd.DataFrame({'分拣中心': center,
+                                '日期': forecast_index,
+                                '货量': forecast.flatten()})
+
+    # 将预测结果添加到总的 DataFrame 中
+    all_forecast_results = pd.concat([all_forecast_results, forecast_df], ignore_index=True)
+
+    # 将结果保存为CSV文件
+    all_forecast_results.to_csv('r1.csv', encoding='utf-8', index=False)
+
+
+
+#------------------------------------------------------------------------------------------------
+
+
+    Data_day_hour = pd.read_csv('2.csv', encoding='gbk')
+
+    # 对数据进行处理，对于每个分拣中心，按照日期，小时进行排序
+    Data_day_hour['日期'] = pd.to_datetime(Data_day_hour['日期'])
+
+    # 对每个分拣中心内部按日期排序
+    Data_day_hour = Data_day_hour.sort_values(['分拣中心', '日期', '小时'])
+    Data_day_hour.reset_index(drop=True, inplace=True)
+
+
+    # 处理一些异常的数据
+    def fill_missing_hours(df):
+        # Ensure '小时' column is of type int for proper reindexing
+        df['小时'] = df['小时'].astype(int)
+
+        # Get all unique centers and dates
+        centers = df['分拣中心'].unique()
+        dates = df['日期'].unique()
+
+        # Create a DataFrame to hold the filled data
+        filled_df = pd.DataFrame()
+
+        # Iterate over each center and date
+        for center in centers:
+            for date in dates:
+                # Filter the DataFrame for the current center and date
+                df_subset = df[(df['分拣中心'] == center) & (df['日期'] == date)]
+
+                # Create a DataFrame with all hours for the current center and date
+                all_hours = pd.DataFrame({'小时': range(24)})
+                all_hours['分拣中心'] = center
+                all_hours['日期'] = date
+
+                # Merge to find missing hours and fill with 0
+                df_full_hours = all_hours.merge(df_subset, on=['分拣中心', '日期', '小时'], how='left')
+                df_full_hours['货量'] = df_full_hours['货量'].fillna(0)
+
+                # Append the filled data for the current center and date to the filled_df
+                filled_df = pd.concat([filled_df, df_full_hours], ignore_index=True)
+
+        # Return the filled DataFrame
+        return filled_df
+
+
+    Data_day_hour_filled = fill_missing_hours(Data_day_hour)
+
+
+    def calculate_hourly_distribution(df):
+        # 计算每天每小时的总货量
+        total_daily = df.groupby(['分拣中心', '日期']).agg({'货量': 'sum'}).rename(columns={'货量': '日总货量'})
+        hourly_data = df.merge(total_daily, on=['分拣中心', '日期'])
+        # 计算每小时占当天总量的比例
+        hourly_data['小时比例'] = hourly_data['货量'] / hourly_data['日总货量']
+        # 计算平均小时比例
+        avg_hourly_distribution = hourly_data.groupby(['分拣中心', '小时']).agg({'小时比例': 'mean'}).reset_index()
+        return avg_hourly_distribution
+
+
+    def distribute_daily_to_hourly(daily_forecast, hourly_distribution):
+        forecast_detailed = daily_forecast.merge(hourly_distribution, on=['分拣中心'])
+        forecast_detailed['预测货量'] = forecast_detailed['货量'] * forecast_detailed['小时比例']
+        return forecast_detailed[['分拣中心', '日期', '小时', '预测货量']]
+
+
+    avg_hourly_distribution = calculate_hourly_distribution(Data_day_hour_filled)
+
+    avg_hourly_distribution.to_csv('avg_distribution.csv', index=False)
+
+    final_result_hourly = distribute_daily_to_hourly(all_forecast_results, avg_hourly_distribution)
+
+    final_result_hourly.to_csv('r2.csv', index=False)
