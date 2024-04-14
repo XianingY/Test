@@ -1,3 +1,4 @@
+
 import pulp as pl
 import pandas as pd
 
@@ -27,7 +28,7 @@ for index, row in df.iterrows():
     if t not in D[i]:
         D[i][t] = {}
     D[i][t][h] = volume
-
+print(D)
 # 分拣中心数量
 num_centers = 57
 
@@ -63,8 +64,8 @@ avg_efficiency_target = 22  # 例如设定为22包裹/小时
 model = pl.LpProblem("Worker_Scheduling", pl.LpMinimize)
 
 # 创建变量
-NZK = pl.LpVariable.dicts("NZK", ((i, t, k) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for k in range(1, num_shifts + 1)), cat='Binary')  # 0-1变量表示是否安排正式工
-NLK = pl.LpVariable.dicts("NLK", ((i, t, k) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for k in range(1, num_shifts + 1)), cat='Binary')  # 0-1变量表示是否安排临时工
+NZK = pl.LpVariable.dicts("NZK", ((i, t, k) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for k in range(1, num_shifts + 1)), )
+NLK = pl.LpVariable.dicts("NLK", ((i, t, k) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for k in range(1, num_shifts + 1)), )
 NZH = pl.LpVariable.dicts("NZH", ((i, t, h) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for h in range(24)), lowBound=0)  # 正式工人数
 NLH = pl.LpVariable.dicts("NLH", ((i, t, h) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for h in range(24)), lowBound=0)  # 临时工人数
 P = pl.LpVariable.dicts("P", ((i, t, h) for i in range(1, num_centers + 1) for t in range(1, num_days + 1) for h in range(24)), lowBound=0)  # 每小时人效
@@ -119,7 +120,7 @@ for i in range(1, num_centers + 1):
             results.append({
                 '分拣中心': f'SC{i}',
                 '日期': f'2023/12/{t}',
-                '班次': f'{shift_hours[h // 4][0]:02d}:00-{shift_hours[h // 4 + 1][1]:02d}:00',
+                '班次': f'{shift_hours[h // 4][0]:02d}:00-{shift_hours[min(h // 4 + 1, len(shift_hours) - 1)][1]:02d}:00',
                 '正式工人数': NZH[i, t, h].value(),
                 '临时工人数': NLH[i, t, h].value()
             })
