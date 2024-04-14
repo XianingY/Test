@@ -3,7 +3,7 @@ import pulp as pl
 import pandas as pd
 
 # 读取数据
-df = pd.read_csv('r2.csv')
+df = pd.read_csv('r4.csv')
 
 # 创建一个空的字典来存储货量预测
 D = {}
@@ -28,7 +28,7 @@ for index, row in df.iterrows():
     if t not in D[i]:
         D[i][t] = {}
     D[i][t][h] = volume
-print(D)
+
 # 分拣中心数量
 num_centers = 57
 
@@ -104,29 +104,36 @@ for i in range(1, num_centers + 1):
         model += sum_NZH <= max_regular_workers
 
         # 排班约束：每名工作人员每天只能排一次班
-        for k in range(1, num_shifts + 1):  # 添加循环定义k
-            model += NZK[i, t, k] + NLK[i, t, k] <= 1
+        # for k in range(1, num_shifts + 1):  # 添加循环定义k
+        #     model += NZK[i, t, k] + NLK[i, t, k] <= 1
 
 # 求解模型
 model.solve()
 
-# 创建一个空的 DataFrame 来存储结果
-results = []
+# 检查模型的求解状态
+print("Status:", pl.LpStatus[model.status])
 
-# 将结果存储到 DataFrame 中
-for i in range(1, num_centers + 1):
-    for t in range(1, num_days + 1):
-        for h in range(24):
-            results.append({
-                '分拣中心': f'SC{i}',
-                '日期': f'2023/12/{t}',
-                '班次': f'{shift_hours[h // 4][0]:02d}:00-{shift_hours[min(h // 4 + 1, len(shift_hours) - 1)][1]:02d}:00',
-                '正式工人数': NZH[i, t, h].value(),
-                '临时工人数': NLH[i, t, h].value()
-            })
+# 如果模型有解，则打印并保存结果
+if model.status == pl.LpStatusOptimal:
+    # 创建一个空的 DataFrame 来存储结果
+    results = []
 
-# 将结果转换为 DataFrame
-results_df = pd.DataFrame(results)
+    # 将结果存储到 DataFrame 中
+    for i in range(1, num_centers + 1):
+        for t in range(1, num_days + 1):
+            for h in range(24):
+                results.append({
+                    '分拣中心': f'SC{i}',
+                    '日期': f'2023/12/{t}',
+                    '班次': f'{shift_hours[h // 4][0]:02d}:00-{shift_hours[min(h // 4 + 1, len(shift_hours) - 1)][1]:02d}:00',
+                    '正式工人数': NZH[i, t, h].value(),
+                    '临时工人数': NLH[i, t, h].value()
+                })
 
-# 将结果保存为 CSV 文件
-results_df.to_csv('output.csv', index=False)
+    # 将结果转换为 DataFrame
+    results_df = pd.DataFrame(results)
+
+    # 将结果保存为 CSV 文件
+    results_df.to_csv('output.csv', index=False)
+else:
+    print("No optimal solution found.")
