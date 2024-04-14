@@ -2,69 +2,68 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
-# 读取数据文件
-edges_df = pd.read_csv('3.csv', encoding='gbk')
-future_edges_df = pd.read_csv('4.csv', encoding='gbk')
-daily_prediction = pd.read_csv('r1.csv', encoding='utf-8')
-avg_distribution = pd.read_csv('avg_distribution.csv', encoding='utf-8')
+# 读取数据文件，做一些数据处理
+edgesDf = pd.read_csv('3.csv', encoding='gbk')  # 读取边数据
+futureEdgesDf = pd.read_csv('4.csv', encoding='gbk')  # 读取未来边数据
+dailyPrediction = pd.read_csv('r1.csv', encoding='utf-8')  # 读取每日预测数据
+avgDistribution = pd.read_csv('avg_distribution.csv', encoding='utf-8')  # 读取平均分配数据
 
-
-# 构建网络图
+# 构建网络图，准备进行货量调整
 G = nx.from_pandas_edgelist(
-    edges_df,
+    edgesDf,
     source='始发分拣中心',
     target='到达分拣中心',
     edge_attr='货量',
     create_using=nx.DiGraph()
 )
 
-# 更新网络图
-for _, row in future_edges_df.iterrows():
+# 更新网络图，根据未来边数据调整货量
+for _, row in futureEdgesDf.iterrows():
     src, dst = row['始发分拣中心'], row['到达分拣中心']
     if G.has_edge(src, dst):
-        specific_avg = edges_df[
-            (edges_df['始发分拣中心'] == src) | (edges_df['到达分拣中心'] == dst)
+        specificAvg = edgesDf[
+            (edgesDf['始发分拣中心'] == src) | (edgesDf['到达分拣中心'] == dst)
         ]['货量'].mean()
-        G[src][dst]['货量'] = specific_avg
+        G[src][dst]['货量'] = specificAvg
     else:
-        specific_avg = edges_df[
-            (edges_df['始发分拣中心'] == src) | (edges_df['到达分拣中心'] == dst)
+        specificAvg = edgesDf[
+            (edgesDf['始发分拣中心'] == src) | (edgesDf['到达分拣中心'] == dst)
         ]['货量'].mean()
-        G.add_edge(src, dst, 货量=specific_avg if not pd.isna(specific_avg) else 0)
+        G.add_edge(src, dst, 货量=specificAvg if not pd.isna(specificAvg) else 0)
 
 # 转换日期格式，确保一致性
-daily_prediction['日期'] = pd.to_datetime(daily_prediction['日期'])
+dailyPrediction['日期'] = pd.to_datetime(dailyPrediction['日期'])
 
 # 创建空DataFrame用于存储更新后的货量
-updated_loads = daily_prediction.copy()
+updatedLoads = dailyPrediction.copy()
 
-# 将DataFrame转换为每天一个字典，便于操作
-daily_load_dict = daily_prediction.groupby('日期')[['分拣中心', '货量']].apply(lambda x: dict(zip(x['分拣中心'], x['货量']))).to_dict()
+# 将DataFrame转换为每天一个字典，方便操作
+dailyLoadDict = dailyPrediction.groupby('日期')[['分拣中心', '货量']].apply(lambda x: dict(zip(x['分拣中心'], x['货量']))).to_dict()
 
 # 遍历每天，调整货量
-for date, loads in daily_load_dict.items():
+for date, loads in dailyLoadDict.items():
     # 遍历图中每条边，调整货量
     for (src, dst, data) in G.edges(data=True):
         if src in loads and dst in loads:
-            transfer_amount = data['货量']
-            loads[src] = max(0, loads[src] - transfer_amount)
-            loads[dst] += transfer_amount
+            transferAmount = data['货量']
+            loads[src] = max(0, loads[src] - transferAmount)
+            loads[dst] += transferAmount
 
     # 更新DataFrame
-    for center, new_load in loads.items():
-        updated_loads.loc[
-            (updated_loads['日期'] == date) & (updated_loads['分拣中心'] == center), '货量'] = new_load
+    for center, newLoad in loads.items():
+        updatedLoads.loc[
+            (updatedLoads['日期'] == date) & (updatedLoads['分拣中心'] == center), '货量'] = newLoad
 
-updated_loads = np.round(updated_loads)
-updated_loads.to_csv('r3.csv', index=False)
+updatedLoads = np.round(updatedLoads)
+updatedLoads.to_csv('r3.csv', index=False)
 
-# 分发每日货量到每小时货量
-def distribute_daily_to_hourly(daily_forecast, hourly_distribution):
-    forecast_detailed = daily_forecast.merge(hourly_distribution, on=['分拣中心'], how='inner')
-    forecast_detailed['预测货量'] = forecast_detailed['货量'] * forecast_detailed['小时比例']
-    return forecast_detailed[['分拣中心', '日期', '小时', '预测货量']]
+# 将每日货量分发到每小时货量
+def distributeDailyToHourly(dailyForecast, hourlyDistribution):
+    forecastDetailed = dailyForecast.merge(hourlyDistribution, on=['分拣中心'], how='inner')
+    forecastDetailed['预测货量'] = forecastDetailed['货量'] * forecastDetailed['小时比例']
+    return forecastDetailed[['分拣中心', '日期', '小时', '预测货量']]
 
-result_hourly = distribute_daily_to_hourly(updated_loads, avg_distribution)
+resultHourly = distributeDailyToHourly(updatedLoads, avgDistribution)
 
-result_hourly = np.round(result_hourly)
-result_hourly.to_csv('r4.csv', index=False)
+resultHourly = np.round(resultHourly)
+resultHourly.to_csv('r4.csv', index=False)
