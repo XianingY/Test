@@ -1,81 +1,124 @@
+User
 import numpy as np
 import pandas as pd
-import pulp as pp
-from tqdm import tqdm
-
-# 读取预测数据
-hourly_prediction = pd.read_csv('r4.csv')
-
-# 选择特定分拣中心
-target_center = 'SC60'
+from datetime import datetime, timedelta
+from scipy.io import loadmat
+from scipy.optimize import linprog
 
 
-def solve_optimization(center, example_data, num_regular_workers, num_days=30):
-    # 定义班次时间
-    shifts = {
-        1: '00:00-08:00',
-        2: '05:00-13:00',
-        3: '08:00-16:00',
-        4: '12:00-20:00',
-        5: '14:00-22:00',
-        6: '16:00-24:00'
-    }
+# Load MATLAB data
+mat_data = loadmat('SC60.mat')
+a = mat_data['a']
+data2 = loadmat('data2.mat')
+sortedData2 = data2['sortedData2']
 
-    # 创建变量
-    x = {i: pp.LpVariable(f"正式工班次{i}", lowBound=0, cat="Binary") for i in range(1, 7)}
-    y = {i: pp.LpVariable(f"临时工班次{i}", lowBound=0, cat="Integer") for i in range(1, 7)}
+# 约束1：完成货量处理
+b1 = a
+A1 = np.zeros((30, 36180))
+xindex = 0
+yindex = 36000
+for i in range(30):
+    A1[i, yindex:yindex + 6] = 160
+    yindex += 6
 
-    # 创建线性规划问题
-    mylp = pp.LpProblem(f"{center}_lp", pp.LpMinimize)
+data = np.zeros((30, 36000))
+data[0, :6] = 200
 
-    # 目标函数：最小化总人天数
-    mylp += pp.lpSum(x.values()) + pp.lpSum(y.values())
+for row in range(30):
+    shift_distance = row * 6
+    for j in range(0, data.shape[1], 180):
+        data[row, j + shift_distance:j + shift_distance + 6] = data[0, j:j + 6]
 
-    # 添加约束条件
-    for day in range(num_days):
-        # 每名正式工出勤率不能高于85%
-        mylp += pp.lpSum(x[i] for i in range(1, 7)) <= 0.85 * num_regular_workers * num_days
+replicated_A = np.tile(data[:, :180], (1, 200))
+new_matrix = np.concatenate((replicated_A, np.zeros((30, 180))), axis=1)
+A1[:, :36180] = new_matrix
 
-        # 连续出勤天数不能超过7天
-        for i in range(1, num_days - 6):
-            # 确保范围保持在字典 'x' 的键内
-            mylp += pp.lpSum(x[j] for j in range(i, min(i + 7, 7))) <= 7
+# 约束2：出勤率小于0.85
+b2 = 0.85 * 30 * np.ones((1200, 1))
+A2 = np.zeros((1200, 36180))
+A2_c = np.zeros((6, 180))
+for i in range(6):
+    A2_c[i, i:6:180] = 1
 
-        # 每天的货量处理完成的基础上，安排的人天数尽可能少
-        mylp += pp.lpSum(x[i] * 25 + y[i] * 20 for i in range(1, 7)) >= example_data.iloc[day]['预测货量']
+repeated_matrix = np.tile(A2_c, (200, 1))
+big_matrix = np.zeros((1200, 36000))
 
-    # 求解模型
-    mylp.solve(pp.PULP_CBC_CMD(msg=0))
+for i in range(200):
+    big_matrix[i * 6:(i + 1) * 6, i * 180:(i + 1) * 180] = repeated_matrix[i * 6:(i + 1) * 6, :]
+
+A2[:, :36000] = big_matrix
+
+# 约束3：连续出勤不超过7天
+b3 = 7 * np.ones((1200, 1))
+A3 = np.zeros((1200, 36180))
+A3_c = np.zeros((6, 180))
+for i in range(6):
+    A3_c[i, i:6:49] = 1
+
+repeated_matrix = np.tile(A3_c, (200, 1))
+big_matrix = np.zeros((1200, 36000))
+
+for i in range(200):
+    big_matrix[i * 6:(i + 1) * 6, i * 180:(i + 1) * 180] = repeated_matrix[i * 6:(i + 1) * 6, :]
+
+A3[:, :36000] = big_matrix
+
+# 约束4：每天出勤一个班次
+beq = np.ones((6000, 1))
+Aeq = np.zeros((6000, 36180))
+
+for i in range(6000):
+    start_col = i * 6
+    end_col = (i + 1) * 6
+    Aeq[i, start_col:end_col] = 1
+
+# 合并约束条件
+A = np.vstack((-A1, A2, A3))
+b = np.vstack((-b1, b2, b3))
+
+# Load data2
+xc = np.ones((200, 30, 6))
+yc = np.ones((30, 6))
+xc1 = xc.reshape(-1, 1)
+yc1 = yc.reshape(-1, 1)
+f = np.vstack((xc1, yc1))
+
+intcon = list(range(1, len(f) + 1))
+lb = np.zeros((len(xc1) + len(yc1), 1))
+ub = np.vstack((np.ones((len(xc1), 1)), np.inf * np.ones((len(yc1), 1))))
+
+# Solve integer linear programming problem
+res = linprog(c=f.flatten(), A_ub=A, b_ub=b.flatten(), A_eq=Aeq, b_eq=beq.flatten(), bounds=list(zip(lb.flatten(), ub.flatten())), method='highs')
+
+# Output results
+print("Optimal Solution:")
+print(res.x)
+print("Objective Function Value:")
+print(res.fun)
+print("Exit Flag:")
+print(res.status)
+
+# Generate additional data for writing to Excel
+banci = ['00:00-08:00', '05:00-13:00', '08:00-16:00', '12:00-20:00', '14:00-22:00', '16:00-24:00']
+date_range = pd.date_range(start='2023-12-01', end='2023-12-30')
+date_str = date_range.strftime('%Y/%m/%d').tolist()
+
+# Generate writing matrix
+write_matrix = []
 
 
-    # 获取结果
-    result_list = []
-    for i in range(1, 7):
-        result_dict = {}
-        result_dict['分拣中心'] = center
-        result_dict['日期'] = example_data.iloc[i - 1]['日期']
-        result_dict['班次'] = shifts[i]
-        if x[i].varValue == 1:
-            result_dict['出勤员工'] = f"正式工{i}"
-        else:
-            result_dict['出勤员工'] = f"临时工{i}"
-        result_list.append(result_dict)
+if res is not None and res.x is not None:
+    for i in range(180):
+        n = int(np.sum(res.x[:200, i]))
+        for j in range(n):
+            write_matrix.append([sortedData2[50][i, 0], date_str[i], banci[i // 30]])
+else:
+    print("Linear programming solver failed to provide a valid solution.")
+    if res is None:
+        print("res is None.")
+    elif res.x is None:
+        print("res.x is None.")
 
-    return result_list
-
-
-# 创建一个空的 DataFrame 来存储结果
-results = []
-
-# 获取目标分拣中心的预测数据和正式工数量
-target_data = hourly_prediction[hourly_prediction['分拣中心'] == target_center]
-num_regular_workers = 200  # 假设分拣中心SC60当前有200名正式工
-
-# 解决优化问题并汇总结果
-results = solve_optimization(target_center, target_data, num_regular_workers)
-
-# 将结果转换为 DataFrame
-results_df = pd.DataFrame(results)
-
-# 将结果保存为 CSV 文件
-results_df.to_csv('r6.csv', index=False)
+# Write to CSV file
+df = pd.DataFrame(write_matrix, columns=['分拣中心', '日期', '班次'])
+df.to_csv('r6.csv', index=False)
