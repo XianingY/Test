@@ -1,0 +1,148 @@
+using System;
+using System.Collections;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+
+public class CrawlerForm : Form
+{
+    private TextBox urlTextBox;
+    private Button startButton;
+    private ListBox listBox;
+    private Crawler myCrawler;
+
+    public CrawlerForm()
+    {
+        urlTextBox = new TextBox() { Left = 10, Top = 10, Width = 400 };
+        startButton = new Button() { Left = 420, Top = 10, Text = "Start" };
+        listBox = new ListBox() { Left = 10, Top = 40, Width = 480, Height = 400 };
+
+        startButton.Click += StartButton_Click;
+
+        this.Controls.Add(urlTextBox);
+        this.Controls.Add(startButton);
+        this.Controls.Add(listBox);
+    }
+
+    private void StartButton_Click(object sender, EventArgs e)
+    {
+        myCrawler = new Crawler(urlTextBox.Text, listBox);
+        new Thread(myCrawler.Crawl).Start();
+    }
+
+    [STAThread]
+    public static void Main()
+    {
+        Application.EnableVisualStyles();
+        Application.Run(new CrawlerForm());
+    }
+}
+
+public class Crawler
+{
+    private Hashtable urls = new Hashtable();
+    private int count = 0;
+    private string startUrl;
+    private ListBox listBox;
+
+    public Crawler(string startUrl, ListBox listBox)
+    {
+        this.startUrl = startUrl;
+        this.listBox = listBox;
+        this.urls.Add(startUrl, false);
+    }
+
+    public void Crawl()
+    {
+        listBox.Invoke(new Action(() => listBox.Items.Add("开始爬行了 ……")));
+
+        while (true)
+        {
+            string current = null;
+
+            lock (urls)
+            {
+                foreach (string url in urls.Keys)
+                {
+                    if (!(bool)urls[url]) // 仅处理尚未下载的 URL
+                    {
+                        current = url;
+                        break; // 找到未处理的 URL 后退出循环
+                    }
+                }
+            }
+
+            if (current == null || count > 10) // 终止条件
+                break;
+
+            listBox.Invoke(new Action(() => listBox.Items.Add("爬行 " + current + " 页面!")));
+            string html = DownLoad(current);
+
+            if (html.Contains("text/html")) // 只有当爬取的是HTML文本时，才解析并爬取下一级URL
+            {
+                urls[current] = true;
+                count++;
+                Parse(html, current);
+            }
+            else
+            {
+                urls[current] = true;
+            }
+        }
+
+        listBox.Invoke(new Action(() => listBox.Items.Add("爬行结束")));
+    }
+
+    public string DownLoad(string url)
+    {
+        try
+        {
+            WebClient webClient = new WebClient();
+            webClient.Encoding = Encoding.UTF8;
+            string html = webClient.DownloadString(url);
+            string fileName = count + ".html";
+            File.WriteAllText(fileName, html, Encoding.UTF8);
+            return html;
+        }
+        catch (Exception ex)
+        {
+            listBox.Invoke(new Action(() => listBox.Items.Add("下载错误: " + ex.Message)));
+            return "";
+        }
+    }
+
+    public void Parse(string html, string pageUrl)
+    {
+        string strRef = @"(href|HREF)\s*=\s*[""']([^""'#>]+)[""']";
+        MatchCollection matches = new Regex(strRef).Matches(html);
+
+        foreach (Match match in matches)
+        {
+            string strRefValue = match.Groups[2].Value;
+
+            if (strRefValue.Length == 0)
+                continue;
+
+            // 转换相对 URL 为绝对 URL
+            if (!strRefValue.StartsWith("http"))
+            {
+                Uri baseUri = new Uri(pageUrl);
+                Uri absoluteUri = new Uri(baseUri, strRefValue);
+                strRefValue = absoluteUri.ToString();
+            }
+
+            // 只爬取初始网站上的网页
+            if (!strRefValue.StartsWith(startUrl))
+                continue;
+
+            lock (urls)
+            {
+                if (urls[strRefValue] == null)
+                    urls[strRefValue] = false;
+            }
+        }
+    }
+}
